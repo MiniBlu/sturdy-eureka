@@ -22,6 +22,9 @@
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
+/* zhengrong.zhang 2014-11-08 Add for open flash problem in status bar problem when camera opening */
+bool camera_power_status = FALSE;
+
 int msm_camera_fill_vreg_params(struct camera_vreg_t *cam_vreg,
 	int num_vreg, struct msm_sensor_power_setting *power_setting,
 	uint16_t power_setting_size)
@@ -1343,6 +1346,8 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 			goto power_up_failed;
 		}
 	}
+/* zhengrong.zhang 2014-11-08 Add for open flash problem in status bar problem when camera opening */
+	camera_power_status = TRUE;
 
 	CDBG("%s exit\n", __func__);
 	return 0;
@@ -1541,6 +1546,8 @@ int msm_camera_power_down(struct msm_camera_power_ctrl_t *ctrl,
 	msm_camera_request_gpio_table(
 		ctrl->gpio_conf->cam_gpio_req_tbl,
 		ctrl->gpio_conf->cam_gpio_req_tbl_size, 0);
+/* zhengrong.zhang 2014-11-08 Add for open flash problem in status bar problem when camera opening */
+	camera_power_status = FALSE;
 	CDBG("%s exit\n", __func__);
 	return 0;
 }

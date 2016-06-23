@@ -25,6 +25,7 @@
 #include <linux/bitops.h>
 #include <linux/leds.h>
 #include <linux/debugfs.h>
+#include <soc/oppo/oppo_project.h>
 
 #define CREATE_MASK(NUM_BITS, POS) \
 	((unsigned char) (((1 << (NUM_BITS)) - 1) << (POS)))
@@ -128,6 +129,7 @@
 #define VDD_TRIM_SUPPORTED			BIT(0)
 
 #define QPNP_CHARGER_DEV_NAME	"qcom,qpnp-linear-charger"
+struct qpnp_lbc_chip *the_chip = NULL;
 
 /* usb_interrupts */
 
@@ -2456,15 +2458,24 @@ static irqreturn_t qpnp_lbc_chg_gone_irq_handler(int irq, void *_chip)
 	return IRQ_HANDLED;
 }
 
+extern void opchg_usbin_valid_irq_handler(bool usb_present);
 static irqreturn_t qpnp_lbc_usbin_valid_irq_handler(int irq, void *_chip)
 {
 	struct qpnp_lbc_chip *chip = _chip;
 	int usb_present;
+#ifndef VENDOR_EDIT
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
 	unsigned long flags;
+#endif
 
+	if(is_project(OPPO_15005)||is_project(OPPO_15035)||is_project(OPPO_15109))
+		return IRQ_HANDLED;
+	
 	usb_present = qpnp_lbc_is_usb_chg_plugged_in(chip);
 	pr_debug("usbin-valid triggered: %d\n", usb_present);
 
+#ifndef VENDOR_EDIT
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
 	if (chip->usb_present ^ usb_present) {
 		chip->usb_present = usb_present;
 		if (!usb_present) {
@@ -2508,7 +2519,9 @@ static irqreturn_t qpnp_lbc_usbin_valid_irq_handler(int irq, void *_chip)
 		pr_debug("Updating usb_psy PRESENT property\n");
 		power_supply_set_present(chip->usb_psy, chip->usb_present);
 	}
-
+#else
+	opchg_usbin_valid_irq_handler(usb_present);
+#endif
 	return IRQ_HANDLED;
 }
 
@@ -2811,6 +2824,16 @@ static int qpnp_lbc_request_irqs(struct qpnp_lbc_chip *chip)
 	return 0;
 }
 
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
+static int qpnp_lbc_request_usbin_valid_irq(struct qpnp_lbc_chip *chip)
+{
+	int rc = 0;
+
+	SPMI_REQUEST_IRQ(chip, USBIN_VALID, rc, usbin_valid, 0,
+			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING, 1);
+	return 0;
+}
+
 static int qpnp_lbc_get_irqs(struct qpnp_lbc_chip *chip, u8 subtype,
 					struct spmi_resource *spmi_resource)
 {
@@ -2851,7 +2874,19 @@ static int qpnp_lbc_get_irqs(struct qpnp_lbc_chip *chip, u8 subtype,
 /* Get/Set initial state of charger */
 static void determine_initial_status(struct qpnp_lbc_chip *chip)
 {
+#ifndef VENDOR_EDIT
+	u8 reg_val;
+	int rc;
+#endif
+
+	if(is_project(OPPO_15005)|| is_project(OPPO_15109))
+		return ;
+	
 	chip->usb_present = qpnp_lbc_is_usb_chg_plugged_in(chip);
+	pr_err("%s usb_present:%d\n",__func__,chip->usb_present);
+
+#ifndef VENDOR_EDIT
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
 	power_supply_set_present(chip->usb_psy, chip->usb_present);
 	/*
 	 * Set USB psy online to avoid userspace from shutting down if battery
@@ -2866,6 +2901,9 @@ static void determine_initial_status(struct qpnp_lbc_chip *chip)
 		}
 		power_supply_set_online(chip->usb_psy, 1);
 	}
+#else
+	opchg_usbin_valid_irq_handler(chip->usb_present);
+#endif	//VENDOR_EDIT
 }
 
 static void qpnp_lbc_collapsible_detection_work(struct work_struct *work)
@@ -2945,6 +2983,45 @@ static enum alarmtimer_restart vddtrim_callback(struct alarm *alarm,
 	schedule_work(&chip->vddtrim_work);
 
 	return ALARMTIMER_NORESTART;
+}
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
+#define BMS_VM_BMS_DATA_REG_0			0x40B0
+void opchg_set_pmic_soc_memory(int soc)
+{
+	int rc = 0;
+	u8 soc_temp = 0;
+	
+	if(the_chip == NULL){
+		pr_debug("%s the_chip is NULL\n",__func__);
+		return;
+	}
+	soc_temp = soc;
+	rc = qpnp_lbc_write(the_chip, BMS_VM_BMS_DATA_REG_0, &soc_temp, 1);
+	if(rc)
+		pr_err("%s fail,rc:%d\n",__func__,rc);
+}
+int opchg_get_pmic_soc_memory(void)
+{
+	int rc = 0;
+	u8 reg = 0;
+	
+	if(the_chip == NULL){
+		pr_debug("%s the_chip is NULL\n",__func__);
+		return reg;
+	}
+	rc = qpnp_lbc_read(the_chip, BMS_VM_BMS_DATA_REG_0, &reg, 1);
+	if(rc)
+		pr_err("%s fail,rc:%d\n",__func__,rc);
+	
+	return reg;
+}
+
+int opchg_get_charger_inout(void)
+{
+	int charger_in=0;
+	
+	charger_in= qpnp_lbc_is_usb_chg_plugged_in(the_chip);	
+	return charger_in;
 }
 
 static int qpnp_lbc_parallel_charger_init(struct qpnp_lbc_chip *chip)
@@ -3160,11 +3237,19 @@ static int qpnp_lbc_main_probe(struct spmi_device *spmi)
 	ktime_t kt;
 	struct qpnp_lbc_chip *chip;
 	struct power_supply *usb_psy;
+	struct power_supply *batt_psy;
 	int rc = 0;
 
 	usb_psy = power_supply_get_by_name("usb");
 	if (!usb_psy) {
 		pr_err("usb supply not found deferring probe\n");
+		return -EPROBE_DEFER;
+	}
+
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
+	batt_psy = power_supply_get_by_name("battery");
+	if (!batt_psy) {
+		pr_err("battery supply not found deferring probe\n");
 		return -EPROBE_DEFER;
 	}
 
@@ -3190,6 +3275,7 @@ static int qpnp_lbc_main_probe(struct spmi_device *spmi)
 	alarm_init(&chip->vddtrim_alarm, ALARM_REALTIME, vddtrim_callback);
 	INIT_DELAYED_WORK(&chip->collapsible_detection_work,
 			qpnp_lbc_collapsible_detection_work);
+	the_chip = chip;
 
 	/* Get all device-tree properties */
 	rc = qpnp_charger_read_dt_props(chip);
@@ -3220,6 +3306,31 @@ static int qpnp_lbc_main_probe(struct spmi_device *spmi)
 					rc);
 		goto fail_chg_enable;
 	}
+#ifndef VENDOR_EDIT
+//Fuchun.Liao@Mobile.BSP.CHG 2015-04-26 add to use pmic-irq for external charge-ic
+	if (chip->cfg_use_external_charger) {
+		pr_warn("Disabling Linear Charger (e-external-charger = 1)\n");
+		rc = qpnp_disable_lbc_charger(chip);
+		if (rc)
+			pr_err("Unable to disable charger rc=%d\n", rc);
+		return -ENODEV;
+	}
+#else
+	//determine_initial_status(chip);
+	rc = qpnp_lbc_request_usbin_valid_irq(chip);
+	if (rc) {
+		pr_err("unable to initialize LBC MISC rc=%d\n", rc);
+		goto fail_chg_enable;
+	}
+	determine_initial_status(chip);
+	rc = qpnp_disable_lbc_charger(chip);
+	if (rc)
+		pr_err("Unable to disable charger rc=%d\n", rc);
+	
+	pr_info("%s success\n",__func__);
+	
+	return 0;
+#endif
 
 	/* Initialize h/w */
 	rc = qpnp_lbc_misc_init(chip);
@@ -3253,7 +3364,11 @@ static int qpnp_lbc_main_probe(struct spmi_device *spmi)
 
 	if (chip->bat_if_base) {
 		chip->batt_present = qpnp_lbc_is_batt_present(chip);
+#ifndef VENDOR_EDIT
 		chip->batt_psy.name = "battery";
+#else
+		chip->batt_psy.name = "battery-invalid";
+#endif
 		chip->batt_psy.type = POWER_SUPPLY_TYPE_BATTERY;
 		chip->batt_psy.properties = msm_batt_power_props;
 		chip->batt_psy.num_properties =

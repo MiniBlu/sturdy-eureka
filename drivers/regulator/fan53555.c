@@ -29,6 +29,10 @@
 #include <linux/delay.h>
 #include <linux/regulator/fan53555.h>
 
+#include <soc/oppo/oppo_project.h>
+
+bool ext_apc_buck_is_fan53555 = false;
+EXPORT_SYMBOL(ext_apc_buck_is_fan53555);
 /* Voltage setting */
 #define FAN53555_VSEL0		0x00
 #define FAN53555_VSEL1		0x01
@@ -611,6 +615,14 @@ static int fan53555_regulator_probe(struct i2c_client *client,
 		dev_err(&client->dev, "Failed to get chip ID!\n");
 		return -ENODEV;
 	}
+	else {
+		if(is_project(OPPO_15018)||is_project(OPPO_15011))
+		{
+ 			ext_apc_buck_is_fan53555 = true;
+		} else {
+			ext_apc_buck_is_fan53555 = false;
+		}
+  	}
 	di->chip_id = val & DIE_ID;
 	/* Get chip revision */
 	ret = fan53555_read(di, FAN53555_ID2, &val);

@@ -28,6 +28,10 @@
 #include "mdss_panel.h"
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
+/* Xiaori.Yuan@Mobile Phone Software Dept.Driver, 2014/08/27  Add for 14045 LCD */
+#include <soc/oppo/oppo_project.h>
+/* nanwei.deng@Mobile Phone Software bsp.Driver, 2014/10/30  Add for 14045 charger */
+extern int lcd_dev;
 
 #define XO_CLK_RATE	19200000
 
@@ -171,8 +175,10 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 	 */
 	if (pdata->panel_info.cont_splash_enabled ||
 		!pdata->panel_info.mipi.lp11_init) {
+	if(!is_project(OPPO_15009) && !is_project(OPPO_15029) && !is_project(OPPO_15109)){
 		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
 			pr_debug("reset enable: pinctrl not enabled\n");
+		}
 
 		ret = mdss_dsi_panel_reset(pdata, 1);
 		if (ret)
@@ -1853,6 +1859,13 @@ int dsi_panel_device_register(struct device_node *pan_node,
 	 * If disp_en_gpio has been set previously (disp_en_gpio > 0)
 	 *  while parsing the panel node, then do not override it
 	 */
+#ifdef VENDOR_EDIT
+	if((is_project(OPPO_15109) && (get_PCB_Version() == HW_VERSION__15)) && ctrl_pdata->lcd_en_gpio <= 0){
+		ctrl_pdata->lcd_en_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node, "qcom,platform-lcd-enable-gpio", 0);
+		if (!gpio_is_valid(ctrl_pdata->lcd_en_gpio))
+		    pr_err("%s:%d, LCD gpio 120 not specified\n", __func__, __LINE__);
+	}
+#endif
 	if (ctrl_pdata->disp_en_gpio <= 0) {
 		ctrl_pdata->disp_en_gpio = of_get_named_gpio(
 			ctrl_pdev->dev.of_node,
@@ -1924,7 +1937,8 @@ int dsi_panel_device_register(struct device_node *pan_node,
 
 	if (ctrl_pdata->status_mode == ESD_REG ||
 			ctrl_pdata->status_mode == ESD_REG_NT35596)
-		ctrl_pdata->check_status = mdss_dsi_reg_status_check;
+		//ctrl_pdata->check_status = mdss_dsi_reg_status_check;
+	;
 	else if (ctrl_pdata->status_mode == ESD_BTA)
 		ctrl_pdata->check_status = mdss_dsi_bta_status_check;
 

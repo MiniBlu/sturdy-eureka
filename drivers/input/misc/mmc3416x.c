@@ -41,6 +41,12 @@
 #include <asm/uaccess.h>
 
 #include "mmc3416x.h"
+#include <linux/sensors_ftm.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
+
+#define MMC3416X_ATTR_FILES
+static struct mmc3416x_data *g_memsic = NULL; 
 
 #define MMC3416X_DELAY_TM_MS	10
 
@@ -102,7 +108,7 @@ struct mmc3416x_vec {
 struct mmc3416x_data {
 	struct mutex		ecompass_lock;
 	struct mutex		ops_lock;
-	struct workqueue_struct *data_wq;
+	struct mutex io_lock;
 	struct delayed_work	dwork;
 	struct sensors_classdev	cdev;
 	struct mmc3416x_vec	last;
@@ -131,7 +137,6 @@ static struct sensors_classdev sensors_cdev = {
 	.resolution = "0.0488228125",
 	.sensor_power = "0.35",
 	.min_delay = 10000,
-	.max_delay = 10000,
 	.fifo_reserved_event_count = 0,
 	.fifo_max_event_count = 0,
 	.enabled = 0,
@@ -258,7 +263,8 @@ static void mmc3416x_poll(struct work_struct *work)
 	struct mmc3416x_vec report;
 	struct mmc3416x_data *memsic = container_of((struct delayed_work *)work,
 			struct mmc3416x_data, dwork);
-	ktime_t timestamp;
+	if(memsic->enable == 0)
+		return;
 
 	vec.x = vec.y = vec.z = 0;
 
@@ -273,21 +279,13 @@ static void mmc3416x_poll(struct work_struct *work)
 	report.y = tmp[3] * vec.x + tmp[4] * vec.y + tmp[5] * vec.z;
 	report.z = tmp[6] * vec.x + tmp[7] * vec.y + tmp[8] * vec.z;
 
-	timestamp = ktime_get_boottime();
 	input_report_abs(memsic->idev, ABS_X, report.x);
 	input_report_abs(memsic->idev, ABS_Y, report.y);
 	input_report_abs(memsic->idev, ABS_Z, report.z);
-	input_event(memsic->idev,
-			EV_SYN, SYN_TIME_SEC,
-			ktime_to_timespec(timestamp).tv_sec);
-	input_event(memsic->idev,
-		EV_SYN, SYN_TIME_NSEC,
-		ktime_to_timespec(timestamp).tv_nsec);
 	input_sync(memsic->idev);
 
 exit:
-	queue_delayed_work(memsic->data_wq,
-			&memsic->dwork,
+	schedule_delayed_work(&memsic->dwork,
 			msecs_to_jiffies(memsic->poll_interval));
 }
 
@@ -510,6 +508,16 @@ static int mmc3416x_parse_dt(struct i2c_client *client,
 	int rc;
 	int i;
 
+	{
+		int vdd_gpio = 0;
+		vdd_gpio = of_get_named_gpio(np, "sensor,vdd-gpio", 0);
+		if (gpio_is_valid(vdd_gpio)) 
+		{
+			printk("%s set gpio:%d to high for vdd supply. \n", __func__, vdd_gpio);
+			gpio_request(vdd_gpio,"vdd-gpio");
+			gpio_direction_output(vdd_gpio, 1);
+		}
+	}
 	rc = of_property_read_string(np, "memsic,dir", &tmp);
 
 	/* does not have a value or the string is not null-terminated */
@@ -565,8 +573,7 @@ static int mmc3416x_set_enable(struct sensors_classdev *sensors_cdev,
 
 		memsic->timeout = jiffies;
 		if (memsic->auto_report)
-			queue_delayed_work(memsic->data_wq,
-				&memsic->dwork,
+			schedule_delayed_work(&memsic->dwork,
 				msecs_to_jiffies(memsic->poll_interval));
 	} else if ((!enable) && memsic->enable) {
 		if (memsic->auto_report)
@@ -596,7 +603,7 @@ static int mmc3416x_set_poll_delay(struct sensors_classdev *sensors_cdev,
 	if (memsic->poll_interval != delay_msec)
 		memsic->poll_interval = delay_msec;
 
-	if (memsic->auto_report && memsic->enable)
+	if (memsic->auto_report)
 		mod_delayed_work(system_wq, &memsic->dwork,
 				msecs_to_jiffies(delay_msec));
 	mutex_unlock(&memsic->ops_lock);
@@ -609,6 +616,223 @@ static struct regmap_config mmc3416x_regmap_config = {
 	.val_bits = 8,
 };
 
+static int mmc3416x_ft_test(struct mmc3416x_data *memsic)
+{
+	int rc;
+	uint8_t result = 0;
+	struct mmc3416x_vec prev_vec, curr_vec;
+
+	printk("in M34160PJ-attrib_test");
+
+	rc = regmap_write(memsic->regmap, MMC3416X_REG_CTRL, MMC3416X_CTRL_RESET);
+	if (rc) {
+		dev_err(&memsic->i2c->dev, "write reg %d failed.(%d)\n",
+				MMC3416X_REG_CTRL, rc);
+		return 0;
+	}
+	printk("in M34160PJ-test bef delay");
+	/* waiting 50 ms after set*/
+	msleep(50);
+
+	rc = regmap_write(memsic->regmap, MMC3416X_REG_CTRL, MMC3416X_CTRL_TM);
+	if (rc) {
+		dev_err(&memsic->i2c->dev, "write reg %d failed.(%d)\n",
+				MMC3416X_REG_CTRL, rc);
+		return 0;
+	}
+
+	printk("in M34160PJ-attrib_test2");
+	/* waiting 10 ms after take measurement command */
+	msleep(10);
+
+	/* Read the data, no temperature data read */
+	rc = mmc3416x_read_xyz(memsic, &prev_vec);
+	if (rc) {
+		dev_warn(&memsic->i2c->dev, "read xyz failed\n");
+		return 0;
+	}
+
+	rc = regmap_write(memsic->regmap, MMC3416X_REG_CTRL, MMC3416X_CTRL_SET);
+	if (rc) {
+		dev_err(&memsic->i2c->dev, "write reg %d failed.(%d)\n",
+				MMC3416X_REG_CTRL, rc);
+		return 0;
+	}
+
+	/* waiting 50 ms after reset*/
+	msleep(50);
+	rc = regmap_write(memsic->regmap, MMC3416X_REG_CTRL, MMC3416X_CTRL_TM);
+	if (rc) {
+		dev_err(&memsic->i2c->dev, "write reg %d failed.(%d)\n",
+				MMC3416X_REG_CTRL, rc);
+		return 0;
+	}
+
+	/* waiting 10 ms after take measurement command */
+	msleep(10);
+
+	/* Read the data, no temperature data read */
+	rc = mmc3416x_read_xyz(memsic, &curr_vec);
+	if (rc) {
+		dev_warn(&memsic->i2c->dev, "read xyz failed\n");
+		return 0;
+	}
+
+	printk("%s curr data  x:%d  y:%d  z:%d \n", __func__, curr_vec.x, curr_vec.y, curr_vec.z);
+	printk("%s prev data  x:%d  y:%d  z:%d \n", __func__, prev_vec.x, prev_vec.y, prev_vec.z);
+	if ((abs(curr_vec.x-prev_vec.x) > 100) || (abs(curr_vec.y-prev_vec.y) > 100) ||
+			(abs(curr_vec.z-prev_vec.z) > 100))
+		result = 1;
+
+	printk("in M34160PJ-test counter");
+
+	if (result)
+	{
+		printk("in M34160PJ-test counter success");
+		return 1;   // success
+	}
+	else
+	{
+		return 0;  //fail
+	}
+}
+static ssize_t mmc3416x_test_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	int32_t  ret;
+
+	mutex_lock(&g_memsic->io_lock);
+	ret = mmc3416x_ft_test(g_memsic);
+	mutex_unlock(&g_memsic->io_lock);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", ret);
+}
+
+static ssize_t mmc3416x_test_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	return size;
+}
+
+static ssize_t mmc3416x_dir_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n", g_memsic->dir);
+}
+
+static ssize_t mmc3416x_dir_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
+{
+	unsigned long value = 0;
+	int ret;
+	ret = kstrtoul(buf, 10, &value);
+	if(ret < 0 || value >= MMC3416X_DIR_COUNT)
+	{
+		printk(KERN_ERR "%s:kstrtoul failed, ret=0x%x\n", __func__, ret);
+		return ret;
+	}
+	g_memsic->dir = value;
+	return size;
+}
+
+
+static struct device_attribute mmc3416x_test_attribute = __ATTR(test,0664,mmc3416x_test_show,mmc3416x_test_store);
+static struct device_attribute mmc3416x_dir_attribute = __ATTR(dir,0664,mmc3416x_dir_show,mmc3416x_dir_store);
+static struct attribute *mmc3416x_attrs [] =
+{
+	&mmc3416x_test_attribute.attr,
+	&mmc3416x_dir_attribute.attr,        
+	NULL
+};
+static struct attribute_group mmc3416x_attribute_group = {
+	.attrs = mmc3416x_attrs,
+};
+
+/*--------------------------------------------------------------------------*/
+static ssize_t mmc3416x_geomag_enable_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	u32 enable;
+	int ret = -EINVAL;
+	struct mmc3416x_data *mag = g_memsic;
+
+	sscanf(buf, "%x", &enable);
+	if (enable && (!mag->enable)) {
+		ret = mmc3416x_power_set(mag, true);
+		if (ret) {
+			dev_err(&mag->i2c->dev, "Power up failed\n");
+		}
+
+		/* send TM cmd before read */
+		ret = regmap_write(mag->regmap, MMC3416X_REG_CTRL,
+				MMC3416X_CTRL_TM);
+		if (ret) {
+			dev_err(&mag->i2c->dev, "write reg %d failed.(%d)\n",
+					MMC3416X_REG_CTRL, ret);
+		}
+
+	} else if ((!enable) && mag->enable) {
+
+		if (mmc3416x_power_set(mag, false))
+			dev_warn(&mag->i2c->dev, "Power off failed\n");
+	} else {
+		dev_warn(&mag->i2c->dev,
+				"ignore enable state change from %d to %d\n",
+				mag->enable, enable);
+	}
+	mag->enable = enable;
+	if (ret == 0)
+		printk("%s: Enable sensor SUCCESS\n",__func__);
+
+	return count;
+}
+static ssize_t mmc3416x_geomag_enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct mmc3416x_data *mag = g_memsic;
+	return snprintf(buf, PAGE_SIZE, "geomagnetic:%d\n", mag->enable);
+}
+static struct kobj_attribute enable = 
+{
+	.attr = {"enable", 0664},
+	.show = mmc3416x_geomag_enable_show,
+	.store = mmc3416x_geomag_enable_store,
+};
+static ssize_t mmc3416x_geomag_raw_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	struct mmc3416x_data *mag = g_memsic;
+	struct mmc3416x_vec xyz;
+	int ret;
+
+	ret = mmc3416x_read_xyz(mag, &xyz);
+
+	return snprintf(buf, PAGE_SIZE, "%d %d %d\n", xyz.x, xyz.y, xyz.z);
+}
+static struct kobj_attribute mag_raw = 
+{
+	.attr = {"mag_raw", 0444},
+	.show = mmc3416x_geomag_raw_show,
+};
+
+static ssize_t mmc3416x_selftest_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int32_t  ret = mmc3416x_ft_test(g_memsic);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", ret);
+}
+static struct kobj_attribute test = 
+{
+	.attr = {"test", 0444},
+	.show = mmc3416x_selftest_show,
+};
+
+
+
+static const struct attribute *mmc3416x_ftm_attrs[] = 
+{
+	&enable.attr,
+	&mag_raw.attr,
+	&test.attr,
+	NULL
+};
+
+static struct dev_ftm mmc3416x_ftm;
+/*--------------------------------------------------------------------------*/
 static int mmc3416x_probe(struct i2c_client *client, const struct i2c_device_id *id)
 {
 	int res = 0;
@@ -647,6 +871,7 @@ static int mmc3416x_probe(struct i2c_client *client, const struct i2c_device_id 
 
 	mutex_init(&memsic->ecompass_lock);
 	mutex_init(&memsic->ops_lock);
+	mutex_init(&memsic->io_lock);
 
 	memsic->regmap = devm_regmap_init_i2c(client, &mmc3416x_regmap_config);
 	if (IS_ERR(memsic->regmap)) {
@@ -675,16 +900,15 @@ static int mmc3416x_probe(struct i2c_client *client, const struct i2c_device_id 
 		goto out_init_input;
 	}
 
-	memsic->data_wq = NULL;
+	res = sysfs_create_group(&memsic->idev->dev.kobj, &mmc3416x_attribute_group);
+	if (res < 0)
+	{
+		printk(KERN_ERR "%s:could not create sysfs group for mmc3416\n", __func__);
+		goto err_sysfs_create_group;
+	}
 	if (memsic->auto_report) {
 		dev_dbg(&client->dev, "auto report is enabled\n");
 		INIT_DELAYED_WORK(&memsic->dwork, mmc3416x_poll);
-		memsic->data_wq =
-			create_freezable_workqueue("mmc3416_data_work");
-		if (!memsic->data_wq) {
-			dev_err(&client->dev, "Cannot create workqueue.\n");
-			goto out_create_workqueue;
-		}
 	}
 
 	memsic->cdev = sensors_cdev;
@@ -703,17 +927,22 @@ static int mmc3416x_probe(struct i2c_client *client, const struct i2c_device_id 
 	}
 
 	memsic->poll_interval = MMC3416X_DEFAULT_INTERVAL_MS;
+	g_memsic = memsic;
 
 	dev_info(&client->dev, "mmc3416x successfully probed\n");
 
+	mmc3416x_ftm.name = "geomagnetic";
+	mmc3416x_ftm.i2c_client = memsic->i2c;
+	mmc3416x_ftm.priv_data = memsic;
+	mmc3416x_ftm.attrs = mmc3416x_ftm_attrs;
+	register_single_dev_ftm(&mmc3416x_ftm);
 	return 0;
 
 out_power_set:
 	sensors_classdev_unregister(&memsic->cdev);
+err_sysfs_create_group:
+	sysfs_remove_group(&memsic->idev->dev.kobj, &mmc3416x_attribute_group);    
 out_register_classdev:
-	if (memsic->data_wq)
-		destroy_workqueue(memsic->data_wq);
-out_create_workqueue:
 	input_unregister_device(memsic->idev);
 out_init_input:
 out_check_device:
@@ -727,8 +956,6 @@ static int mmc3416x_remove(struct i2c_client *client)
 	struct mmc3416x_data *memsic = dev_get_drvdata(&client->dev);
 
 	sensors_classdev_unregister(&memsic->cdev);
-	if (memsic->data_wq)
-		destroy_workqueue(memsic->data_wq);
 	mmc3416x_power_deinit(memsic);
 
 	if (memsic->idev)
@@ -743,7 +970,6 @@ static int mmc3416x_suspend(struct device *dev)
 	struct mmc3416x_data *memsic = dev_get_drvdata(dev);
 
 	dev_dbg(dev, "suspended\n");
-	mutex_lock(&memsic->ops_lock);
 
 	if (memsic->enable) {
 		if (memsic->auto_report)
@@ -756,7 +982,6 @@ static int mmc3416x_suspend(struct device *dev)
 		}
 	}
 exit:
-	mutex_unlock(&memsic->ops_lock);
 	return res;
 }
 
@@ -775,8 +1000,7 @@ static int mmc3416x_resume(struct device *dev)
 		}
 
 		if (memsic->auto_report)
-			queue_delayed_work(memsic->data_wq,
-				&memsic->dwork,
+			schedule_delayed_work(&memsic->dwork,
 				msecs_to_jiffies(memsic->poll_interval));
 	}
 

@@ -232,6 +232,11 @@ struct msm8916_asoc_mach_data {
 	void __iomem *vaddr_gpio_mux_pcm_ctl;
 	struct on_demand_supply wsa_switch_supply;
 	struct snd_info_entry *codec_root;
+	int audio_vdd_en_gpio;
+	int spk_rec_sw;
+	int tfa9890_rst;
+	int spk_pa_en;
+	int yda145_boost_en;
 };
 
 struct msm8x16_wcd_pdata {
@@ -270,6 +275,10 @@ struct msm8x16_wcd {
 	int num_irqs;
 	u32 mclk_rate;
 	char __iomem *dig_base;
+	int pcb_ver_flag0;
+	int pcb_ver_flag1;
+	int pcb_ver_flag2;
+	char pcb_ver_string[10];
 };
 
 struct msm8x16_wcd_priv {

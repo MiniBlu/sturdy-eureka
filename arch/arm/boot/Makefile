@@ -14,8 +14,18 @@
 ifneq ($(MACHINE),)
 include $(srctree)/$(MACHINE)/Makefile.boot
 endif
-
-include $(srctree)/arch/arm/boot/dts/qcom/Makefile
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15011 MSM_15062),)
+include $(srctree)/arch/arm/boot/dts/15011/Makefile
+endif
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15018 MSM_15089),)
+include $(srctree)/arch/arm/boot/dts/15018/Makefile
+endif
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15022 MSM_15081),)
+include $(srctree)/arch/arm/boot/dts/15022/Makefile
+endif
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15109 MSM_15309),)
+include $(srctree)/arch/arm/boot/dts/15109/Makefile
+endif
 ifneq ($(DTSSUBDIR),)
 DTSSUBDIR_INCS=$(foreach DIR, $(DTSSUBDIR), $(addsuffix /Makefile, $(addprefix $(srctree)/arch/arm/boot/dts/, $(DIR))))
 include $(DTSSUBDIR_INCS)

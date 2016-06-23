@@ -245,6 +245,9 @@ struct wcd_mbhc_config {
 	uint32_t linein_th;
 	struct wcd_mbhc_moisture_cfg moist_cfg;
 	bool insert_detect;
+	int spk_pa_en_state;
+	int gpio_spk_pa_en;
+	int gpio_yda145_boost_en;
 };
 
 struct wcd_mbhc_intr {

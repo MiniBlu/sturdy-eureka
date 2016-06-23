@@ -53,6 +53,7 @@
 #include <linux/msm-bus.h>
 #include "msm_serial_hs_hwreg.h"
 
+#include <soc/oppo/boot_mode.h>
 /*
  * There are 3 different kind of UART Core available on MSM.
  * High Speed UART (i.e. Legacy HSUART), GSBI based HSUART
@@ -1348,6 +1349,14 @@ static struct msm_hsl_port msm_hsl_uart_ports[] = {
 };
 
 #define UART_NR	ARRAY_SIZE(msm_hsl_uart_ports)
+//Tong.han@BSP.group.TP, Modify for selct console config for diffrent scene,2015/11/15
+static bool boot_with_console(void)
+{
+	if((get_boot_mode() == MSM_BOOT_MODE__FACTORY) ||(get_boot_mode() == MSM_BOOT_MODE__RF)||(get_boot_mode() == MSM_BOOT_MODE__WLAN)||(get_boot_mode() == MSM_BOOT_MODE__MOS))
+		return true;
+	else
+		return false;
+}
 
 static inline struct uart_port *get_port_from_line(unsigned int line)
 {
@@ -1369,7 +1378,14 @@ static void dump_hsl_regs(struct uart_port *port)
 	ncf = msm_hsl_read(port, regmap[vid][UARTDM_NCF_TX]);
 	txfs = msm_hsl_read(port, regmap[vid][UARTDM_TXFS]);
 	rxfs = msm_hsl_read(port, regmap[vid][UARTDM_RXFS]);
+#if defined(CONFIG_OPPO_DAILY_BUILD)
 	con_state = get_console_state(port);
+#else
+	if(!boot_with_console())
+		con_state = -ENODEV;
+	else
+		con_state = get_console_state(port);
+#endif
 
 	msm_hsl_console_state[0] = sr;
 	msm_hsl_console_state[1] = isr;
@@ -1564,7 +1580,14 @@ static ssize_t show_msm_console(struct device *dev,
 	struct platform_device *pdev = to_platform_device(dev);
 	port = get_port_from_line(get_line(pdev));
 
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 	enable = get_console_state(port);
+#else
+	if(!boot_with_console())
+		enable = -ENODEV;
+	else
+		enable = get_console_state(port);
+#endif
 
 	return snprintf(buf, sizeof(enable), "%d\n", enable);
 }
@@ -1585,7 +1608,14 @@ static ssize_t set_msm_console(struct device *dev,
 	struct platform_device *pdev = to_platform_device(dev);
 	port = get_port_from_line(get_line(pdev));
 
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 	cur_state = get_console_state(port);
+#else
+	if(!boot_with_console())
+		cur_state = -ENODEV;
+	else
+		cur_state = get_console_state(port);
+#endif
 	enable = buf[0] - '0';
 
 	if (enable == cur_state)
@@ -1636,6 +1666,15 @@ static struct uart_driver msm_hsl_uart_driver = {
 	.nr = UART_NR,
 	.cons = MSM_HSL_CONSOLE,
 };
+#ifndef CONFIG_OPPO_DAILY_BUILD
+static struct uart_driver msm_hsl_uart_driver_no_console = {
+	.owner = THIS_MODULE,
+	.driver_name = "msm_serial_hsl",
+	.dev_name = "ttyHSL",
+	.nr = UART_NR,
+	.cons = NULL,
+};
+#endif
 
 static struct msm_serial_hslite_platform_data
 		*msm_hsl_dt_to_pdata(struct platform_device *pdev)
@@ -1823,9 +1862,11 @@ static int msm_serial_hsl_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, port);
 	pm_runtime_enable(port->dev);
 #ifdef CONFIG_SERIAL_MSM_HSL_CONSOLE
+	if(boot_with_console()) {
 	ret = device_create_file(&pdev->dev, &dev_attr_console);
 	if (unlikely(ret))
 		pr_err("Can't create console attribute\n");
+	}
 #endif
 	msm_hsl_debugfs_init(msm_hsl_port, get_line(pdev));
 	mutex_init(&msm_hsl_port->clk_mutex);
@@ -1839,7 +1880,14 @@ static int msm_serial_hsl_probe(struct platform_device *pdev)
 	 */
 	if (msm_hsl_port->pclk)
 		clk_prepare_enable(msm_hsl_port->pclk);
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 	ret = uart_add_one_port(&msm_hsl_uart_driver, port);
+#else
+	if(!boot_with_console())
+		ret = uart_add_one_port(&msm_hsl_uart_driver_no_console, port);
+	else
+		ret = uart_add_one_port(&msm_hsl_uart_driver, port);
+#endif
 	if (msm_hsl_port->pclk)
 		clk_disable_unprepare(msm_hsl_port->pclk);
 
@@ -1856,6 +1904,7 @@ static int msm_serial_hsl_remove(struct platform_device *pdev)
 
 	port = get_port_from_line(get_line(pdev));
 #ifdef CONFIG_SERIAL_MSM_HSL_CONSOLE
+	if(boot_with_console())
 	device_remove_file(&pdev->dev, &dev_attr_console);
 #endif
 	pm_runtime_put_sync(&pdev->dev);
@@ -1867,7 +1916,14 @@ static int msm_serial_hsl_remove(struct platform_device *pdev)
 	device_set_wakeup_capable(&pdev->dev, 0);
 	platform_set_drvdata(pdev, NULL);
 	mutex_destroy(&msm_hsl_port->clk_mutex);
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 	uart_remove_one_port(&msm_hsl_uart_driver, port);
+#else
+	if(!boot_with_console())
+		uart_remove_one_port(&msm_hsl_uart_driver_no_console, port);
+	else
+		uart_remove_one_port(&msm_hsl_uart_driver, port);
+#endif
 
 	clk_put(msm_hsl_port->pclk);
 	clk_put(msm_hsl_port->clk);
@@ -1877,6 +1933,27 @@ static int msm_serial_hsl_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
+//xuanzhi.qin@Swdp.Android.kernel, 2015/01/14, add for  no console suspend
+static int msm_hsl_prepare(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+
+	struct uart_port *up = get_port_from_line(get_line(pdev));
+	dev_dbg(dev, "msm_hsl_prepare: suspend prepare\n");
+	up->is_suspending = true;
+
+	return 0;
+}
+
+static void msm_hsl_complete(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+
+	struct uart_port *up = get_port_from_line(get_line(pdev));
+	dev_dbg(dev, "msm_hsl_complete: suspend exit\n");
+	up->is_suspending = false;
+}
+
 static int msm_serial_hsl_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -1884,11 +1961,24 @@ static int msm_serial_hsl_suspend(struct device *dev)
 	port = get_port_from_line(get_line(pdev));
 
 	if (port) {
+		//xuanzhi.qin@Swdp.Android.kernel, 2015/01/14, add for  no console suspend
+		if (port->is_suspending && !console_suspend_enabled
+			&& is_console(port)) {
+			dev_dbg(dev, "disable console suspend and return\n");
+			return -EBUSY;
+		}
 
 		if (is_console(port))
 			msm_hsl_deinit_clock(port);
 
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 		uart_suspend_port(&msm_hsl_uart_driver, port);
+#else
+		if(!boot_with_console())
+			uart_suspend_port(&msm_hsl_uart_driver_no_console, port);
+		else
+			uart_suspend_port(&msm_hsl_uart_driver, port);
+#endif
 		if (device_may_wakeup(dev))
 			enable_irq_wake(port->irq);
 	}
@@ -1904,7 +1994,14 @@ static int msm_serial_hsl_resume(struct device *dev)
 
 	if (port) {
 
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 		uart_resume_port(&msm_hsl_uart_driver, port);
+#else
+		if(!boot_with_console())
+			uart_resume_port(&msm_hsl_uart_driver_no_console, port);
+		else
+			uart_resume_port(&msm_hsl_uart_driver, port);
+#endif
 		if (device_may_wakeup(dev))
 			disable_irq_wake(port->irq);
 
@@ -1946,6 +2043,11 @@ static struct dev_pm_ops msm_hsl_dev_pm_ops = {
 	.resume = msm_serial_hsl_resume,
 	.runtime_suspend = msm_hsl_runtime_suspend,
 	.runtime_resume = msm_hsl_runtime_resume,
+#if defined(CONFIG_PM)
+//xuanzhi.qin@Swdp.Android.kernel, 2015/01/14, add for no console suspend
+	.prepare		 = msm_hsl_prepare,
+	.complete		 = msm_hsl_complete,
+#endif /* CONFIG_PM*/
 };
 
 static struct platform_driver msm_hsl_platform_driver = {
@@ -1963,7 +2065,14 @@ static int __init msm_serial_hsl_init(void)
 {
 	int ret;
 
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 	ret = uart_register_driver(&msm_hsl_uart_driver);
+#else
+	if(!boot_with_console())
+		ret = uart_register_driver(&msm_hsl_uart_driver_no_console);
+	else
+		ret = uart_register_driver(&msm_hsl_uart_driver);
+#endif
 	if (unlikely(ret))
 		return ret;
 
@@ -1973,7 +2082,16 @@ static int __init msm_serial_hsl_init(void)
 
 	ret = platform_driver_register(&msm_hsl_platform_driver);
 	if (unlikely(ret))
+	{
+#if defined(CONFIG_OPPO_DAILY_BUILD)
+	uart_unregister_driver(&msm_hsl_uart_driver);
+#else
+		if(!boot_with_console())
+			uart_unregister_driver(&msm_hsl_uart_driver_no_console);
+		else
 		uart_unregister_driver(&msm_hsl_uart_driver);
+#endif
+	}
 
 	pr_info("driver initialized\n");
 
@@ -1984,10 +2102,18 @@ static void __exit msm_serial_hsl_exit(void)
 {
 	debugfs_remove_recursive(debug_base);
 #ifdef CONFIG_SERIAL_MSM_HSL_CONSOLE
+	if(boot_with_console())
 	unregister_console(&msm_hsl_console);
 #endif
 	platform_driver_unregister(&msm_hsl_platform_driver);
+#if defined( CONFIG_OPPO_DAILY_BUILD)
 	uart_unregister_driver(&msm_hsl_uart_driver);
+#else
+	if(!boot_with_console())
+		uart_unregister_driver(&msm_hsl_uart_driver_no_console);
+	else
+		uart_unregister_driver(&msm_hsl_uart_driver);
+#endif
 }
 
 module_init(msm_serial_hsl_init);

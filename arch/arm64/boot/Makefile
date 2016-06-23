@@ -14,8 +14,19 @@
 # Based on the ia64 boot/Makefile.
 #
 
-include $(srctree)/arch/arm64/boot/dts/qcom/Makefile
-
+#include $(srctree)/arch/arm64/boot/dts/qcom/Makefile
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15011 MSM_15062),)
+include $(srctree)/arch/arm64/boot/dts/15011/Makefile
+endif
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15018 MSM_15089),)
+include $(srctree)/arch/arm64/boot/dts/15018/Makefile
+endif
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15022 MSM_15081),)
+include $(srctree)/arch/arm64/boot/dts/15022/Makefile
+endif
+ifneq ($(filter $(OPPO_TARGET_DEVICE),MSM_15109 MSM_15309),)
+include $(srctree)/arch/arm64/boot/dts/15109/Makefile
+endif
 targets := Image Image.gz
 
 DTB_NAMES := $(subst $\",,$(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES))

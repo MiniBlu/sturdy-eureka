@@ -386,6 +386,19 @@ KBUILD_AFLAGS_MODULE  := -DMODULE
 KBUILD_CFLAGS_MODULE  := -DMODULE
 KBUILD_LDFLAGS_MODULE := -T $(srctree)/scripts/module-common.lds
 
+#jiangyg@OnlineRd.PM, 2013/10/15, add enviroment variant
+KBUILD_CFLAGS +=   -DVENDOR_EDIT
+KBUILD_CPPFLAGS += -DVENDOR_EDIT
+CFLAGS_KERNEL +=   -DVENDOR_EDIT
+CFLAGS_MODULE +=   -DVENDOR_EDIT
+
+#Added by Tong.han@Bsp.group,2014-12-23,for select different config of console.
+ifneq ($(SPECIAL_OPPO_CONFIG),1)
+ifeq ($(filter release,$(OPPO_BUILD_TYPE)),)
+KBUILD_CFLAGS += -DCONFIG_OPPO_DAILY_BUILD
+endif
+endif
+
 # Read KERNELRELEASE from include/config/kernel.release (if it exists)
 KERNELRELEASE = $(shell cat include/config/kernel.release 2> /dev/null)
 KERNELVERSION = $(VERSION)$(if $(PATCHLEVEL),.$(PATCHLEVEL)$(if $(SUBLEVEL),.$(SUBLEVEL)))$(EXTRAVERSION)
